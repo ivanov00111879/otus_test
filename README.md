@@ -1,3 +1,69 @@
+NFS, FUSE
+Что нужно сделать?
+
+запустить 2 виртуальных машины (сервер NFS и клиента);
+на сервере NFS должна быть подготовлена и экспортирована директория;
+в экспортированной директории должна быть поддиректория с именем upload с правами на запись в неё;
+экспортированная директория должна автоматически монтироваться на клиенте при старте виртуальной машины (systemd, autofs или fstab — любым способом);
+монтирование и работа NFS на клиенте должна быть организована с использованием NFSv3.
+
+ВМ backend-01 - сервер NFS - 192.168.0.115
+ВМ backend-02 - клиент NFS - 192.168.0.121
+
+Настраиваем сервер NFS
+Установим сервер NFS:
+root@backend-01:~# apt install nfs-kernel-server
+
+Создаём и настраиваем директорию, которая будет экспортирована в будущем
+root@backend-01:~# mkdir -p /srv/share/upload
+root@backend-01:~# chown -R nobody:nogroup /srv/share
+root@backend-01:~# chmod 0777 /srv/share/upload
+
+Cоздаём в файле /etc/exports структуру, которая позволит экспортировать ранее созданную директорию:
+root@backend-01:~# cat << EOF > /etc/exports
+/srv/share 192.168.0.121/32(rw,sync,root_squash)
+EOF
+
+Экспортируем ранее созданную директорию:
+root@backend-01:~# exportfs -r
+
+Проверяем экспортированную директорию следующей командой
+root@backend-01:~# exportfs -s
+/srv/share  192.168.0.121/32(sync,wdelay,hide,no_subtree_check,sec=sys,rw,secure,root_squash,no_all_squash)
+
+Настраиваем клиент NFS
+Установим пакет с NFS-клиентом
+root@backend-02:~# sudo apt install nfs-common
+
+Добавляем в /etc/fstab строку
+root@backend-02:~# echo "192.168.0.115:/srv/share/ /mnt nfs vers=3,noauto,x-systemd.automount 0 0" >> /etc/fstab
+
+и выполняем команды:
+root@backend-02:~# systemctl daemon-reload
+root@backend-02:~# systemctl restart remote-fs.target
+root@backend-02:~# mount | grep mnt
+systemd-1 on /mnt type autofs (rw,relatime,fd=53,pgrp=1,timeout=0,minproto=5,maxproto=5,direct,pipe_ino=9907)
+
+Проверка работоспособности
+Заходим на сервер. 
+Заходим в каталог /srv/share/upload.
+Создаём тестовый файл touch check_file
+root@backend-01:~# cd /srv/share/upload/
+root@backend-01:/srv/share/upload# touch check_file
+root@backend-01:/srv/share/upload# ls
+check_file
+
+Заходим на клиент.
+Заходим в каталог /mnt/upload. 
+Проверяем наличие ранее созданного файла.
+root@backend-02:~# cd /mnt/upload/
+root@backend-02:/mnt/upload# ls
+check_file
+
+
+
+
+
 ZFS
 Что нужно сделать?
 
