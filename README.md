@@ -1,3 +1,124 @@
+Управление пакетами. Дистрибьюция софта 
+Что нужно сделать?
+
+создать свой RPM (можно взять свое приложение, либо собрать к примеру Apache с определенными опциями);
+cоздать свой репозиторий и разместить там ранее собранный RPM;
+реализовать это все либо в Vagrant, либо развернуть у себя через Nginx и дать ссылку на репозиторий.
+
+Создать свой RPM пакет
+Для данного задания нам понадобятся следующие установленные пакеты:
+root@localhost:~# yum install -y wget rpmdevtools rpm-build createrepo  yum-utils cmake gcc git nano
+
+Для примера возьмем пакет Nginx и соберем его с дополнительным модулем ngx_broli
+Загрузим SRPM пакет Nginx для дальнейшей работы над ним:
+root@localhost:~# mkdir rpm && cd rpm
+root@localhost:~/rpm# yumdownloader --source nginx
+Last metadata expiration check: 16:32:56 ago on Tue 28 Jul 2026 11:51:08 AM EDT.
+nginx-1.26.3-6.0.1.el10_2.5.src.rpm
+
+При установке такого пакета в домашней директории создается дерево каталогов для сборки, далее поставим все зависимости для сборки пакета Nginx:
+root@localhost:~/rpm# rpm -Uvh nginx*.src.rpm
+Updating / installing...
+   1:nginx-2:1.26.3-6.0.1.el10_2.5    ################################# [100%]
+root@localhost:~/rpm# yum-builddep nginx
+Last metadata expiration check: 16:37:07 ago on Tue 28 Jul 2026 11:51:08 AM EDT.
+
+Также нужно скачать исходный код модуля ngx_brotli — он
+потребуется при сборке
+root@localhost:~/rpm# cd /root
+root@localhost:~#  git clone --recurse-submodules -j8 \
+https://github.com/google/ngx_brotli
+root@localhost:~# cd ngx_brotli/deps/brotli
+root@localhost:~/ngx_brotli/deps/brotli# mkdir out && cd out
+
+Собираем модуль ngx_brotli:
+root@localhost:~/ngx_brotli/deps/brotli/out# cmake -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DCMAKE_C_FLAGS="-Ofast -m64 -march=native -mtune=native -flto -funroll-loops -ffunction-sections -fdata-sections -Wl,--gc-sections" -DCMAKE_CXX_FLAGS="-Ofast -m64 -march=native -mtune=native -flto -funroll-loops -ffunction-sections -fdata-sections -Wl,--gc-sections" -DCMAKE_INSTALL_PREFIX=./installed ..
+root@localhost:~/ngx_brotli/deps/brotli/out# cmake --build . --config Release -j 2 --target brotlienc
+root@localhost:~/ngx_brotli/deps/brotli/out# cd ../../../..
+
+Нужно поправить сам spec файл, чтобы Nginx собирался с необходимыми нам опциями: находим секцию с параметрами configure (до условий if) и добавляем указание на модуль (не забудьте указать завершающий обратный слэш):
+
+Теперь можно приступить к сборке RPM пакета:
+root@localhost:~# cd ~/rpmbuild/SPECS/
+root@localhost:~/rpmbuild/SPECS# rpmbuild -ba nginx.spec -D 'debug_package %{nil}'
+
+Копируем пакеты в общий каталог:
+root@localhost:~/rpmbuild/SPECS# cp ~/rpmbuild/RPMS/noarch/* ~/rpmbuild/RPMS/x86_64/
+root@localhost:~/rpmbuild/SPECS# cd ~/rpmbuild/RPMS/x86_64
+
+Теперь можно установить наш пакет и убедиться, что nginx работает:
+root@localhost:~/rpmbuild/RPMS/x86_64# yum localinstall *.rpm
+root@localhost:~/rpmbuild/RPMS/x86_64# systemctl start nginx
+root@localhost:~/rpmbuild/RPMS/x86_64# systemctl status nginx
+ nginx.service - The nginx HTTP and reverse proxy server
+    Loaded: loaded (/usr/lib/systemd/system/nginx.service; disabled; preset: disabled)
+    Active: active (running) since Wed 2026-07-29 05:01:31 EDT; 7s ago
+
+Далее мы будем использовать его для доступа к своему репозиторию.
+
+Создать свой репозиторий и разместить там ранее собранный RPM
+Теперь приступим к созданию своего репозитория. Директория для статики у Nginx по умолчанию /usr/share/nginx/html. Создадим там каталог repo:
+root@localhost:~# mkdir /usr/share/nginx/html/repo
+
+Копируем туда наши собранные RPM-пакеты:
+root@localhost:~# cp ~/rpmbuild/RPMS/x86_64/*.rpm /usr/share/nginx/html/repo/
+
+Инициализируем репозиторий командой:
+root@localhost:~# createrepo /usr/share/nginx/html/repo/
+Directory walk started
+Directory walk done - 10 packages
+Temporary output repo path: /usr/share/nginx/html/repo/.repodata/
+Pool started (with 5 workers)
+Pool finished
+
+Для прозрачности настроим в NGINX доступ к листингу каталога. В файле /etc/nginx/nginx.conf в блоке server добавим следующие директивы:
+index index.html index.htm;
+autoindex on;
+
+Проверяем синтаксис и перезапускаем NGINX:
+root@localhost:~# nginx -t
+nginx: the configuration file /etc/nginx/nginx.conf syntax is ok
+nginx: configuration file /etc/nginx/nginx.conf test is successful
+root@localhost:~# nginx -s reload
+
+Теперь ради интереса можно посмотреть в браузере или с помощью curl:
+curl -a http://localhost/repo/
+<html>
+<head><title>Index of /repo/</title></head>
+<body>
+<h1>Index of /repo/</h1><hr><pre><a href="../">../</a>
+<a href="repodata/">repodata/</a>                                          29-Jul-2026 09:06                   -
+<a href="nginx-1.26.3-6.0.1.el10.5.x86_64.rpm">nginx-1.26.3-6.0.1.el10.5.x86_64.rpm</a>               29-Jul-2026 09:04               33639
+<a href="nginx-all-modules-1.26.3-6.0.1.el10.5.noarch.rpm">nginx-all-modules-1.26.3-6.0.1.el10.5.noarch.rpm</a>   29-Jul-2026 09:04               10505
+<a href="nginx-core-1.26.3-6.0.1.el10.5.x86_64.rpm">nginx-core-1.26.3-6.0.1.el10.5.x86_64.rpm</a>          29-Jul-2026 09:04              686053
+<a href="nginx-filesystem-1.26.3-6.0.1.el10.5.noarch.rpm">nginx-filesystem-1.26.3-6.0.1.el10.5.noarch.rpm</a>    29-Jul-2026 09:04               12219
+<a href="nginx-mod-devel-1.26.3-6.0.1.el10.5.x86_64.rpm">nginx-mod-devel-1.26.3-6.0.1.el10.5.x86_64.rpm</a>     29-Jul-2026 09:04              898034
+<a href="nginx-mod-http-image-filter-1.26.3-6.0.1.el10.5.x86_64.rpm">nginx-mod-http-image-filter-1.26.3-6.0.1.el10.5..&gt;</a> 29-Jul-2026 09:04               22548
+<a href="nginx-mod-http-perl-1.26.3-6.0.1.el10.5.x86_64.rpm">nginx-mod-http-perl-1.26.3-6.0.1.el10.5.x86_64.rpm</a> 29-Jul-2026 09:04               34446
+<a href="nginx-mod-http-xslt-filter-1.26.3-6.0.1.el10.5.x86_64.rpm">nginx-mod-http-xslt-filter-1.26.3-6.0.1.el10.5...&gt;</a> 29-Jul-2026 09:04               21302
+<a href="nginx-mod-mail-1.26.3-6.0.1.el10.5.x86_64.rpm">nginx-mod-mail-1.26.3-6.0.1.el10.5.x86_64.rpm</a>      29-Jul-2026 09:04               56534
+<a href="nginx-mod-stream-1.26.3-6.0.1.el10.5.x86_64.rpm">nginx-mod-stream-1.26.3-6.0.1.el10.5.x86_64.rpm</a>    29-Jul-2026 09:04               90509
+</pre><hr></body>
+</html>
+
+Все готово для того, чтобы протестировать репозиторий.
+Добавим его в /etc/yum.repos.d:
+root@localhost:~# cat >> /etc/yum.repos.d/otus.repo << EOF
+[otus]
+name=otus-linux
+baseurl=http://localhost/repo
+gpgcheck=0
+enabled=1
+EOF
+
+Убедимся, что репозиторий подключился и посмотрим, что в нем есть:
+root@localhost:~# yum repolist enabled | grep otus
+otus                   otus-linux
+
+
+
+
+
 NFS, FUSE
 Что нужно сделать?
 
