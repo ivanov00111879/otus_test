@@ -1,3 +1,246 @@
+
+Инициализация системы. Systemd 
+Выполнить следующие задания:
+Написать service, который будет раз в 30 секунд мониторить лог на предмет наличия ключевого слова (файл лога и ключевое слово должны задаваться в /etc/default).
+Установить spawn-fcgi и создать unit-файл (spawn-fcgi.sevice) с помощью переделки init-скрипта (https://gist.github.com/cea2k/1318020).
+Доработать unit-файл Nginx (nginx.service) для запуска нескольких инстансов сервера с разными конфигурационными файлами одновременно.
+
+Для начала создаём файл с конфигурацией для сервиса в директории /etc/default - из неё сервис будет брать необходимые переменные.
+root@ubuntu:/etc/default# cat /etc/default/watchlog
+# Configuration file for my watchlog service
+# Place it to /etc/default
+
+# File and word in that file that we will be monit
+WORD="ALERT"
+LOG=/var/log/watchlog.log
+
+Затем создаем /var/log/watchlog.log и пишем туда строки на своё усмотрение,
+плюс ключевое слово ‘ALERT’
+
+Создадим скрипт:
+root@ubuntu:~# cat > /opt/watchlog.sh
+#!/bin/bash
+
+WORD=$1
+LOG=$2
+DATE=`date`
+
+if grep $WORD $LOG &> /dev/null
+then
+logger "$DATE: I found word, Master!"
+else
+exit 0
+fi
+
+Команда logger отправляет лог в системный журнал.
+Добавим права на запуск файла:
+root@ubuntu:~# chmod +x /opt/watchlog.sh
+
+Создадим юнит для сервиса:
+root@ubuntu:~# cat > /etc/systemd/system/watchlog.service
+[Unit]
+Description=My watchlog service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/default/watchlog
+ExecStart=/opt/watchlog.sh $WORD $LOG
+
+Создадим юнит для таймера:
+root@ubuntu:~# cat > /etc/systemd/system/watchlog.timer
+[Unit]
+Description=Run watchlog script every 30 second
+
+[Timer]
+# Run every 30 second
+OnUnitActiveSec=30
+Unit=watchlog.service
+
+[Install]
+WantedBy=multi-user.target
+
+Затем достаточно только запустить timer:
+root@ubuntu:~# systemctl start watchlog.timer
+
+root@ubuntu:~# tail -n 1000 /var/log/syslog | grep "I found word"
+2026-08-04T13:04:16.715563+00:00 ubuntu root: Tue Aug  4 01:04:16 PM UTC 2026: I found word, Master!
+
+Установить spawn-fcgi и создать unit-файл (spawn-fcgi.sevice) с помощью переделки init-скрипта
+Устанавливаем spawn-fcgi и необходимые для него пакеты:
+root@ubuntu:~# apt install spawn-fcgi php php-cgi php-cli \
+ apache2 libapache2-mod-fcgid -y
+
+Cоздаем файл с настройками для будущего сервиса в файле /etc/spawn-fcgi/fcgi.conf.
+root@ubuntu:~# cat > /etc/spawn-fcgi/fcgi.conf
+# You must set some working options before the "spawn-fcgi" service will work.
+# If SOCKET points to a file, then this file is cleaned up by the init script.
+#
+# See spawn-fcgi(1) for all possible options.
+#
+# Example :
+SOCKET=/var/run/php-fcgi.sock
+OPTIONS="-u www-data -g www-data -s $SOCKET -S -M 0600 -C 32 -F 1 -- /usr/bin/php-cgi"
+
+А сам юнит-файл будет примерно следующего вида:
+root@ubuntu:~# cat > /etc/systemd/system/spawn-fcgi.service
+[Unit]
+Description=Spawn-fcgi startup service by Otus
+After=network.target
+
+[Service]
+Type=simple
+PIDFile=/var/run/spawn-fcgi.pid
+EnvironmentFile=/etc/spawn-fcgi/fcgi.conf
+ExecStart=/usr/bin/spawn-fcgi -n $OPTIONS
+KillMode=process
+
+[Install]
+WantedBy=multi-user.target
+
+Убеждаемся, что все успешно работает:
+root@ubuntu:~# systemctl start spawn-fcgi
+root@ubuntu:~# systemctl status spawn-fcgi
+ spawn-fcgi.service - Spawn-fcgi startup service by Otus
+    Loaded: loaded (/etc/systemd/system/spawn-fcgi.service; disabled; preset: enabled)
+    Active: active (running) since Tue 2026-08-04 13:35:38 UTC; 7s ago
+
+Доработать unit-файл Nginx (nginx.service) для запуска нескольких инстансов сервера с разными конфигурационными файлами одновременно
+Установим Nginx из стандартного репозитория:
+root@ubuntu:~# apt install nginx -y
+
+Для запуска нескольких экземпляров сервиса модифицируем исходный service для использования различной конфигурации, а также PID-файлов. Для этого создадим новый Unit для работы с шаблонами (/etc/systemd/system/nginx@.service):
+root@ubuntu:~# cat > /etc/systemd/system/nginx@.service
+
+# Stop dance for nginx
+# =======================
+#
+# ExecStop sends SIGSTOP (graceful stop) to the nginx process.
+# If, after 5s (--retry QUIT/5) nginx is still running, systemd takes control
+# and sends SIGTERM (fast shutdown) to the main process.
+# After another 5s (TimeoutStopSec=5), and if nginx is alive, systemd sends
+# SIGKILL to all the remaining processes in the process group (KillMode=mixed).
+#
+# nginx signals reference doc:
+# http://nginx.org/en/docs/control.html
+#
+[Unit]
+Description=A high performance web server and a reverse proxy server
+Documentation=man:nginx(8)
+After=network.target nss-lookup.target
+
+[Service]
+Type=forking
+PIDFile=/run/nginx-%I.pid
+ExecStartPre=/usr/sbin/nginx -t -c /etc/nginx/nginx-%I.conf -q -g 'daemon on; master_process on;'
+ExecStart=/usr/sbin/nginx -c /etc/nginx/nginx-%I.conf -g 'daemon on; master_process on;'
+ExecReload=/usr/sbin/nginx -c /etc/nginx/nginx-%I.conf -g 'daemon on; master_process on;' -s reload
+ExecStop=-/sbin/start-stop-daemon --quiet --stop --retry QUIT/5 --pidfile /run/nginx-%I.pid
+TimeoutStopSec=5
+KillMode=mixed
+
+[Install]
+WantedBy=multi-user.target
+
+Далее необходимо создать два файла конфигурации (/etc/nginx/nginx-first.conf, /etc/nginx/nginx-second.conf). Их можно сформировать из стандартного конфига /etc/nginx/nginx.conf, с модификацией путей до PID-файлов и разделением по портам:
+
+nginx-first.conf
+pid /run/nginx-first.pid;
+
+events {
+    worker_connections 1024;
+}
+
+http {
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
+
+    log_format main '$remote_addr - $remote_user [$time_local] "$request" '
+                    '$status $body_bytes_sent "$http_referer" '
+                    '"$http_user_agent" "$http_x_forwarded_for"';
+
+    access_log /var/log/nginx/access-first.log main;
+    error_log /var/log/nginx/error-first.log warn;
+
+    server {
+        listen 9001;
+        server_name localhost;
+
+        location / {
+            root /usr/share/nginx/html;
+            index index.html index.htm;
+        }
+    }
+
+    #include /etc/nginx/sites-enabled/*;
+}
+
+nginx-second.conf
+pid /run/nginx-second.pid;
+
+events {
+    worker_connections 1024;
+}
+
+http {
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
+
+    log_format main '$remote_addr - $remote_user [$time_local] "$request" '
+                    '$status $body_bytes_sent "$http_referer" '
+                    '"$http_user_agent" "$http_x_forwarded_for"';
+
+    access_log /var/log/nginx/access-second.log main;
+    error_log /var/log/nginx/error-second.log warn;
+
+    server {
+        listen 9002;
+        server_name localhost;
+
+        location / {
+            root /usr/share/nginx/html-second;
+            index index.html index.htm;
+        }
+    }
+}
+
+root@ubuntu:/etc/nginx# nginx -c /etc/nginx/nginx-first.conf -t
+nginx: the configuration file /etc/nginx/nginx-first.conf syntax is ok
+nginx: configuration file /etc/nginx/nginx-first.conf test is successful
+root@ubuntu:/etc/nginx# nginx -c /etc/nginx/nginx-second.conf -t
+nginx: the configuration file /etc/nginx/nginx-second.conf syntax is ok
+nginx: configuration file /etc/nginx/nginx-second.conf test is successful
+
+Проверим работу:
+root@ubuntu:~# systemctl start nginx@first
+root@ubuntu:~# systemctl start nginx@second
+root@ubuntu:~# systemctl status nginx@first
+ nginx@first.service - A high performance web server and a reverse proxy server
+    Loaded: loaded (/etc/systemd/system/nginx@.service; disabled; preset: enabled)
+    Active: active (running) since Tue 2026-08-04 14:06:04 UTC; 1min 9s ago
+root@ubuntu:~# systemctl status nginx@second
+ nginx@second.service - A high performance web server and a reverse proxy server
+    Loaded: loaded (/etc/systemd/system/nginx@.service; disabled; preset: enabled)
+    Active: active (running) since Tue 2026-08-04 14:06:16 UTC; 7s ago
+
+Проверить можно несколькими способами, например, посмотреть, какие порты слушаются:
+root@ubuntu:~# ss -tnulp | grep nginx
+tcp   LISTEN 0      511             0.0.0.0:9002      0.0.0.0:*    users:(("nginx",pid=11029,fd=5),("nginx",pid=11028,fd=5))
+tcp   LISTEN 0      511             0.0.0.0:9001      0.0.0.0:*    users:(("nginx",pid=11022,fd=5),("nginx",pid=11021,fd=5))
+
+Или просмотреть список процессов:
+root@ubuntu:~#  ps afx | grep nginx
+  11041 pts/1    S+     0:00                          \_ grep --color=auto nginx
+  11021 ?        Ss     0:00 nginx: master process /usr/sbin/nginx -c /etc/nginx/nginx-first.conf -g daemon on; master_process on;
+  11022 ?        S      0:00  \_ nginx: worker process
+  11028 ?        Ss     0:00 nginx: master process /usr/sbin/nginx -c /etc/nginx/nginx-second.conf -g daemon on; master_process on;
+  11029 ?        S      0:00  \_ nginx: worker process
+
+
+
+
+
+
+
 Загрузка системы 
 Что нужно сделать?
 
