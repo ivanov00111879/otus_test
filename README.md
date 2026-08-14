@@ -1,3 +1,92 @@
+Управление процессами 
+#!/bin/bash
+
+# Выводим заголовок таблицы
+printf "%-8s %-8s %-10s %s\n" "PID" "PPID" "STATUS" "COMMAND"
+echo "--------------------------------------------------------"
+
+# Перебираем все директории в /proc, имена которых состоят только из цифр (PID)
+for pid_dir in /proc/[0-9]*/; do
+    # Убираем лишние символы, чтобы оставить только чистый PID
+    pid=$(basename "$pid_dir")
+
+    # Проверяем существование файла status (процесс мог завершиться)
+    if [ -f "${pid_dir}status" ]; then
+        # Извлекаем PPID и состояние (State) из файла status
+        ppid=$(awk '/^PPid:/ {print $2}' "${pid_dir}status")
+        status=$(awk '/^State:/ {print $2}' "${pid_dir}status")
+
+        # Пытаемся получить полную команду запуска из cmdline
+        # В cmdline аргументы разделены нулевым байтом (\0), заменяем их на пробелы
+        if [ -s "${pid_dir}cmdline" ]; then
+            command=$(tr '\0' ' ' < "${pid_dir}cmdline" | xargs)
+        else
+            # Если cmdline пуст (например, у статусных/ядерных потоков), берем имя из status
+            command=$(awk -F'\t' '/^Name:/ {print $2}' "${pid_dir}status")
+            command="[$command]"
+        fi
+
+        # Выводим полученные данные в отформатированном виде
+        printf "%-8s %-8s %-10s %s\n" "$pid" "$ppid" "$status" "$command"
+    fi
+done
+
+ubuntu@ubuntu:/usr/local/bin$ sudo bash proc_info.sh
+PID      PPID     STATUS     COMMAND
+--------------------------------------------------------
+1        0        S          [systemd]
+10       2        I          [kworker/0:0H-kblockd]
+11       2        I          [kworker/u2:0-events_power_efficient]
+12       2        I          [kworker/R-mm_pe]
+13       2        I          [rcu_tasks_kthread]
+1319     1        S          [master]
+1320     1319     S          [pickup]
+1321     1319     S          [qmgr]
+1333     1        S          [sshd]
+1334     1333     S          [sshd]
+1340     2        S          [psimon]
+1342     1        S          [systemd]
+1343     1342     S          [(sd-pam)]
+14       2        I          [rcu_tasks_rude_kthread]
+144      2        S          [scsi_eh_2]
+145      2        I          [kworker/R-scsi_]
+1455     1334     S          [sshd]
+1456     1455     S          [bash]
+146      2        S          [scsi_eh_3]
+147      2        I          [kworker/R-scsi_]
+148      2        S          [scsi_eh_4]
+149      2        I          [kworker/R-scsi_]
+15       2        I          [rcu_tasks_trace_kthread]
+150      2        S          [scsi_eh_5]
+151      2        I          [kworker/R-scsi_]
+1511     1456     S          [sudo]
+1512     1511     S          [sudo]
+1513     1512     S          [bash]
+152      2        S          [scsi_eh_6]
+153      2        I          [kworker/R-scsi_]
+154      2        I          [kworker/u2:5-events_unbound]
+155      2        I          [kworker/u2:6-events_power_efficient]
+156      2        I          [kworker/u2:7-events_unbound]
+157      2        I          [kworker/0:2H-kblockd]
+16       2        S          [ksoftirqd/0]
+169      2        I          [kworker/R-kdmfl]
+17       2        I          [rcu_preempt]
+18       2        S          [migration/0]
+19       2        S          [idle_inject/0]
+198      2        I          [kworker/R-raid5]
+2        0        S          [kthreadd]
+20       2        S          [cpuhp/0]
+21       2        S          [kdevtmpfs]
+
+
+
+
+
+
+
+
+
+
 
 Инициализация системы. Systemd 
 Выполнить следующие задания:
