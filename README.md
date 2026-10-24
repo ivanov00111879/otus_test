@@ -1,3 +1,136 @@
+Тема: Bash
+
+Что нужно сделать?
+Написать скрипт для CRON, который раз в час формирует отчёт и отправляет его на заданную почту.
+
+Отчёт должен содержать:
+- IP-адреса с наибольшим числом запросов (с момента последнего запуска);
+- Запрашиваемые URL с наибольшим числом запросов (с момента последнего запуска);
+- Ошибки веб-сервера/приложения (с момента последнего запуска);
+- HTTP-коды ответов с указанием их количества (с момента последнего запуска).
+- Скрипт должен предотвращать одновременный запуск нескольких копий, до его завершения.
+- В письме должен быть прописан обрабатываемый временной диапазон.
+
+Скрипт:
+
+#!/bin/bash
+
+# Определяем переменные
+LOG_FILE="/var/log/nginx/access_4560_644067-586145-be5697.log"   # лог-файл
+EMAIL_TO="test@mail.ru"                                          # Email получателя отчета
+LOCK_FILE="/tmp/server_report.lock"                              # look file для блокировки
+POS_FILE="/tmp/server_report.pos"                                # Файл позиции
+TOP_LIMIT=10                                                     # Количество выводимых строк
+
+# Проверяем доступность лог-файла
+if [[ ! -f "$LOG_FILE" ]]; then
+    echo "Ошибка: Лог-файл $LOG_FILE не найден!" >&2
+    exit 1
+fi
+
+# Проверка блокировки
+exec 9>"$LOCK_FILE"
+if ! flock -n 9; then
+    echo "Скрипт уже запущен в другом процессе." >&2
+    exit 1
+fi
+
+# Работа с временныеми файлами, для новых записей в логе
+TMP_CHUNK=$(mktemp /tmp/log_chunk.XXXXXX)
+TMP_REPORT=$(mktemp /tmp/report.XXXXXX)
+
+cleanup() {
+    rm -f "$TMP_CHUNK" "$TMP_REPORT"
+}
+trap cleanup EXIT INT TERM
+
+get_new_log_entries() {
+    local total_lines
+    local last_line=0
+    total_lines=$(wc -l < "$LOG_FILE")
+
+    # Определяем позицию в логе на которой остановились с момента предыдущего запуска
+    if [[ -n "$(find /tmp -name "$(basename "$POS_FILE")" -type f 2>/dev/null)" ]]; then
+        last_line=$(cat "$POS_FILE")
+    fi
+
+    if (( total_lines < last_line )); then
+        last_line=0
+    fi
+
+# Читаем весь лог-файл если это самый первый запуск (last_line == 0),
+    if (( last_line == 0 )); then
+        lines_to_read=$total_lines
+    else
+        lines_to_read=$(( total_lines - last_line ))
+    fi
+
+    if (( lines_to_read > 0 )); then
+        tail -n "$lines_to_read" "$LOG_FILE" > "$TMP_CHUNK"
+    else
+        touch "$TMP_CHUNK"
+    fi
+
+    echo "$total_lines" > "$POS_FILE"
+}
+
+generate_report() {
+    if [[ ! -s "$TMP_CHUNK" ]]; then
+        echo "С момента последнего запуска новых запросов не зафиксировано." > "$TMP_REPORT"
+        return 0
+    fi
+
+# Определяем обрабатываемый временной диапазон
+    local start_time
+    local end_time
+    start_time=$(sed -n '1s/^.*\[\([^]]*\)\].*$/\1/p' "$TMP_CHUNK")
+    end_time=$(sed -n '$s/^.*\[\([^]]*\)\].*$/\1/p' "$TMP_CHUNK")
+
+    {
+        echo "================================================================="
+        echo " ЕЖЕЧАСНЫЙ ОТЧЕТ О РАБОТЕ ВЕБ-СЕРВЕРА"
+        echo "================================================================="
+        echo "Период обработки данных:"
+        echo " С: $start_time"
+        echo " По: $end_time"
+        echo "-----------------------------------------------------------------"
+        echo ""
+        echo "--- ТОП $TOP_LIMIT IP-адресов ---"
+        awk '{print $1}' "$TMP_CHUNK" | sort | uniq -c | sort -rn | head -n "$TOP_LIMIT"
+        echo ""
+        echo "--- ТОП $TOP_LIMIT URL ---"
+        awk '{print $7}' "$TMP_CHUNK" | sort | uniq -c | sort -rn | head -n "$TOP_LIMIT"
+        echo ""
+        echo "--- HTTP-коды ответов ---"
+        awk '{print $9}' "$TMP_CHUNK" | sort | uniq -c | sort -rn
+        echo ""
+        echo "--- Ошибки веб-сервера (4xx и 5xx) ---"
+        awk '$9 ~ /^[45]/ {print "Код " $9 " -> URL: " $7 " (от IP: " $1 ")"}' "$TMP_CHUNK" | sort | uniq -c | sort -rn | head>        if ! awk '{print $9}' "$TMP_CHUNK" | grep -q '^[45]'; then
+            echo "Ошибок не обнаружено."
+        fi
+        echo "================================================================="
+    } > "$TMP_REPORT"
+}
+
+get_new_log_entries
+generate_report
+
+# ОТЛАДКА: Вывод отчета в терминал
+#echo "================================================================="
+#echo "--- ОТЛАДКА: Вывод отчета в терминал ---"
+#cat "$TMP_REPORT"
+
+# Отправка почты
+if [[ -s "$TMP_REPORT" ]]; then
+    mail -s "Web Server Analytics Report ($(date '+%Y-%m-%d %H:%M'))" "$EMAIL_TO" < "$TMP_REPORT" 2>/dev/null
+fi
+
+
+
+
+
+
+
 Тема: Управление процессами
 
 Задание:
