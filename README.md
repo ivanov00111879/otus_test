@@ -22,18 +22,18 @@ RUN apk update && apk upgrade
 COPY index.html /usr/share/nginx/html/index.html
 EXPOSE 80
 CMD ["nginx", "-g", "daemon off;"]
-
+```
 Собираем образ:
 ![Скриншот](docker/1.png)
-
+```
 Создаем репозиторий в docker hub:
 https://hub.docker.com/r/ivanov00111879/ivanov00111879
-
+```
 Пушим образ:
 ![Скриншот](docker/2.png)
 
 Запушить не получается ввиду ограничений доступа к сервису
-```
+
 
 
 
