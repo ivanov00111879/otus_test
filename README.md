@@ -14,7 +14,7 @@ curl https://get.docker.com | sudo sh
 
 Создаем кастомную страницу:
 debian@debian:~$ sudo mkdir nginx-alpine && cd nginx-alpine
-```debian@debian:~/nginx-alpine$ sudo echo "<h1>Nginx Alpine: this is custom docker container</h1>" > index.html```
+debian@debian:~/nginx-alpine$ sudo echo "<h1>Nginx Alpine: this is custom docker container</h1>" > index.html
 
 Создаем Dockerfile:
 FROM nginx:alpine
