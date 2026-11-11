@@ -1,3 +1,46 @@
+Тема: Docker
+
+Задание:
+* Установите Docker на хост машину https://docs.docker.com/engine/install/ubuntu/
+* Установите Docker Compose - как плагин, или как отдельное приложение
+* Создайте свой кастомный образ nginx на базе alpine. После запуска nginx должен отдавать кастомную страницу (достаточно изменить дефолтную страницу nginx)
+* Определите разницу между контейнером и образом
+*Вывод опишите в домашнем задании.
+*Ответьте на вопрос: Можно ли в контейнере собрать ядро?
+
+Решение:
+Устанавливаем Docker и плагин Docker Compose:
+curl https://get.docker.com | sudo sh
+
+Создаем кастомную страницу:
+debian@debian:~$ sudo mkdir nginx-alpine && cd nginx-alpine
+debian@debian:~/nginx-alpine$ sudo echo "<h1>Nginx Alpine: this is custom docker container</h1>" > index.html
+
+Создаем Dockerfile:
+FROM nginx:alpine
+RUN apk update && apk upgrade
+COPY index.html /usr/share/nginx/html/index.html
+EXPOSE 80
+CMD ["nginx", "-g", "daemon off;"]
+
+Собираем образ:
+
+
+Создаем репозиторий в docker hub:
+https://hub.docker.com/r/ivanov00111879/ivanov00111879
+
+Пушим образ:
+
+Запушить не получается ввиду ограничений доступа к сервису
+
+
+
+
+
+
+
+
+
 Тема: Bash
 
 Что нужно сделать?
